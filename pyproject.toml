@@ -1,3 +1,32 @@
 [build-system]
 requires = ["setuptools>=42"]
 build-backend = "setuptools.build_meta"
+[project]
+name = "andreani_aa_geo_tools"
+version = "0.0.2"
+authors = [
+  { name = "Gabriel Aranda", email = "garanda@andreani.com" },
+  { name = "Mariana Liu", email = "mliu@andreani.com" },
+  { name = "Yasmin Ojeda", email = "yojeda@andreani.com" },
+  { name = "Daiana Alonso", email = "dalonso@andreani.com" },
+  { name = "Facundo Silvestre", email = "fsilvestre@andreani.com" },
+  { name = "Santiago Bergman", email = "sbergman@andreani.com" },
+  { name = "Matías Moyano", email = "matmoyano@andreani.com" },
+  { name = "Giuliana Vera", email = "gvera@andreani.com" },
+  { name = "Eloy Chang", email = "echang@andreani.com" },
+  { name = "Ezequiel Brodschi", email = "ebrodschi@andreani.com" },
+  { name = "Sol Cari", email = "scari@andreani.com" },
+]
+description = "Common functions used by the Andreani Advanced Analytics team"
+readme = "README.md"
+license = { file="LICENSE" }
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/eloychang/andreani_aa_geo_tools"
+"Bug Tracker" = "https://github.com/eloychang/andreani_aa_geo_tools/issues"
