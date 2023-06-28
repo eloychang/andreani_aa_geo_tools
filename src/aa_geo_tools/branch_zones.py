@@ -10,7 +10,7 @@ target_crs = pyproj.CRS("EPSG:3857")
 project = pyproj.Transformer.from_crs(
     source_crs, target_crs, always_xy=True).transform
 
-def update_cp_and_zone(row, df):
+def update_zone(row, df):
     """Actualiza cp y zona de hexágonos duplicados, tomando las del borde del polígono más lejano al centroide del hexágono."""
     grouped = df.groupby('h3_id').get_group(row['h3_id'])
     
@@ -27,26 +27,13 @@ def update_cp_and_zone(row, df):
         distance_to_poly2 = proyected_poly2.distance(projected_point)
         
         if distance_to_poly1 > distance_to_poly2:
-            codigo = grouped.iloc[0]['codigo']
-            idgla = grouped.iloc[0]['idgla']
-            idsucursal = grouped.iloc[0]['idsucursal']
-            zona = grouped.iloc[0]['zona']
+            updated_row = row.copy()
+            updated_row.at['codigo', 'idgla', 'idsucursal', 'zona'] = grouped.iloc[0][['codigo', 'idgla', 'idsucursal', 'zona']]
         else:
-            codigo = grouped.iloc[1]['codigo']
-            idgla = grouped.iloc[1]['idgla']
-            idsucursal = grouped.iloc[1]['idsucursal']
-            zona = grouped.iloc[1]['zona']
+            updated_row = row.copy()
+            updated_row.at['codigo', 'idgla', 'idsucursal', 'zona'] = grouped.iloc[1][['codigo', 'idgla', 'idsucursal', 'zona']]
     else:
-        codigo = row['codigo']
-        idgla = row['idgla']
-        idsucursal = row['idsucursal']
-        zona = row['zona']
-    
-    updated_row = row.copy()
-    updated_row['codigo'] = codigo
-    updated_row['idgla'] = idgla
-    updated_row['idsucursal'] = idsucursal
-    updated_row['zona'] = zona
+        updated_row = row
     
     return updated_row
 
@@ -208,7 +195,7 @@ def generate_hexagons_list(gdf, resolution=9):
     gdf['hex_border'] = order_by_nearest_polygon(set_hex_border, gdf['geometry'])
     gdf['h3_id'] = gdf.apply(lambda row: row['hex_border'] | row['hex_filled_voids'], axis=1)
     df = gdf.explode('h3_id').reset_index(drop=True)
-    df = df.apply(update_cp_and_zone, args=(df,), axis=1).drop_duplicates(subset='h3_id')
+    df = df.apply(update_zone, args=(df,), axis=1).drop_duplicates(subset='h3_id')
     return df[['h3_id', 'codigo', 'idgla', 'idsucursal', 'zona']].reset_index(drop=True).copy()
 
 
