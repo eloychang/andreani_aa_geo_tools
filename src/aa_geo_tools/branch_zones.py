@@ -1,25 +1,27 @@
 import geopandas as gpd
 import h3
 import pandas as pd
-from shapely.geometry import Polygon, MultiPolygon, Point
-from shapely.ops import cascaded_union, transform
+from shapely.geometry import Polygon, MultiPolygon, Point, mapping, LineString
+from shapely.ops import unary_union, transform
 import pyproj
+import warnings
+warnings.filterwarnings("ignore", message="CRS not set for some of the concatenation inputs.")
 
 # Proyecciones para calcular las distancias en metros
 source_crs = pyproj.CRS("EPSG:4326")
 target_crs = pyproj.CRS("EPSG:3857")
-project = pyproj.Transformer.from_crs(
+projection = pyproj.Transformer.from_crs(
     source_crs, target_crs, always_xy=True).transform
 
 def update_zone(row_group):
-    """Actualiza cp y zona de hexágonos duplicados, tomando las del borde del polígono más lejano al centroide del hexágono."""
-    proyected_poly1 = transform(project, row_group.iloc[0]['geometry'])
-    proyected_poly2 = transform(project, row_group.iloc[1]['geometry'])
+    """Actualiza datos de hexágonos duplicados, quedándose con las del borde del polígono más lejano al centroide del hexágono."""
+    proyected_poly1 = transform(projection, row_group.iloc[0]['geometry'])
+    proyected_poly2 = transform(projection, row_group.iloc[1]['geometry'])
     
     # Obtengo centroide
     lat, lon = h3.h3_to_geo(row_group.iloc[0]['h3_id'])
     # Proyecto para poder obtener distancia en metros
-    projected_point = transform(project, Point(lon, lat))
+    projected_point = transform(projection, Point(lon, lat))
     
     distances = [
         proyected_poly1.distance(projected_point),
@@ -48,7 +50,7 @@ def order_by_nearest_polygon(set_hex_border, list_polygons):
         donde el índice en la lista indica la zona a la que pertenecen
     """
     # Proyecto todos los polígonos
-    list_polygons_proj = [transform(project, poly) for poly in list_polygons]
+    list_polygons_proj = [transform(projection, poly) for poly in list_polygons]
 
     # Asigno borde a cada zona dependiendo de la cercanía con el centroide
     list_border = [set() for _ in range(len(list_polygons))]
@@ -56,7 +58,7 @@ def order_by_nearest_polygon(set_hex_border, list_polygons):
         # Obtengo centroide
         lat, lon = h3.h3_to_geo(h)
         # Proyecto para poder obtener distancia en metros
-        projected_point = transform(project, Point(lon, lat))
+        projected_point = transform(projection, Point(lon, lat))
 
         min_distance = float('inf')
         min_index = 0
@@ -96,6 +98,18 @@ def get_set_border_not_in_polygon(gdf):
     return set_hex_border_copy
 
 
+def interpolate_coords_between(start, end, num_points):
+    # Create a LineString object between the start and stop points
+    segment = LineString([start, end])
+    interpolated_coords = [start]
+    for i in range(num_points):
+        fraction = (i + 1) / (num_points + 1)
+        point = segment.interpolate(fraction, normalized=True)
+        interpolated_coords.append((point.x, point.y))
+    interpolated_coords.append(end)
+    return interpolated_coords
+
+
 def get_hexes_traversed_by_borders(polygon, res):
     """Obtiene los hexágonos del borde del polígono, en la resolución dada.
 
@@ -107,28 +121,32 @@ def get_hexes_traversed_by_borders(polygon, res):
         set(string): conjunto de hexágonos obtenidos
     """
     set_traversed_hexes = set()
+
+    # Obtengo coordenadas del borde del polígono
     coords = polygon.boundary.coords
     for j in range(len(coords)-1):
         # Para cada segmento del linestring, obtengo el punto inicial y final
         start_leg = coords[j]
         stop_leg = coords[j+1]
-        # Obtengo el hexágono de cada coordenada (están como lon/lat)
-        start_hexid = h3.geo_to_h3(lat=start_leg[1],
-                                   lng=start_leg[0],
-                                   resolution=res)
-        stop_hexid = h3.geo_to_h3(lat=stop_leg[1],
-                                  lng=stop_leg[0],
-                                  resolution=res)
-        # Genero una línea como sucesión de hexágonos entre el inicial y final
-        traversed_hexes = h3.h3_line(start=start_hexid,
-                                     end=stop_hexid)
-        set_traversed_hexes |= set(traversed_hexes)
+        interpolated = interpolate_coords_between(start_leg, stop_leg, 4)
+        for start_i, end_i in zip(interpolated[:-1], interpolated[1:]):
+            # Obtengo el hexágono de cada coordenada (están como lon/lat)
+            start_hexid = h3.geo_to_h3(lat=start_i[1],
+                                    lng=start_i[0],
+                                    resolution=res)
+            stop_hexid = h3.geo_to_h3(lat=end_i[1],
+                                    lng=end_i[0],
+                                    resolution=res)
+            # Genero una línea como sucesión de hexágonos entre el inicial y final
+            traversed_hexes = h3.h3_line(start=start_hexid,
+                                        end=stop_hexid)
+            set_traversed_hexes |= set(traversed_hexes)
+            
     return set_traversed_hexes
 
 
 def include_border_into_polygon(gdf):
-    """Tomando todos los hexágonos del borde de los polígonos, 
-    incluyo los que estén dentro de las áreas
+    """Tomando los hexágonos del borde de los polígonos, incluyo los que estén dentro de las áreas
 
     Args:
         gdf (GeoDataFrame): debe contener la columna 'hex_border' con los bordes de
@@ -151,80 +169,80 @@ def include_border_into_polygon(gdf):
         list_add_hex.append(set_hex)
 
     gdf['add_in_zone'] = list_add_hex
-    gdf['hex_filled_voids'] = gdf.apply(
-        lambda row: set(row['hex_filled_voids']) | row['add_in_zone'], axis=1)
-    return gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'geometry', 'hex_filled_voids', 'hex_border']].copy()
+    gdf['hex_filled'] = gdf.apply(
+        lambda row: set(row['hex_filled']) | row['add_in_zone'], axis=1)
+    return gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'geometry', 'hex_filled', 'hex_border']].copy()
 
 
-def generate_hexagons_list(gdf, resolution=9):
+def fill_hex_res(gdf, res):
+    """
+    Rellena los polígonos con hexágonos de resolución dada y delimita los bordes con hexágonos
+    
+    Args:
+        gdf (GeoDataFrame): polígonos de las áreas con sus datos
+        res (int): resolución (tamaño) de los hexágonos
+
+    Returns:
+        GeoDataFrame: mismo que el input, con los hexágonos resultado de rellenar las zonas y sus bordes.
+    """
+    gdf["geom_geojson"] = gdf["geometry"].apply(
+        lambda x: mapping(x))
+    gdf["hex_filled"] = gdf["geom_geojson"].apply(
+        lambda x: list(h3.polyfill(geojson=x, res=res, geo_json_conformant=True)))
+    gdf['hex_border'] = gdf.apply(lambda row : get_hexes_traversed_by_borders(row['geometry'], res), axis = 1)
+    return gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'hex_filled', 'hex_border', 'geometry']].copy()
+
+
+def generate_hexagons_list(gdf, res):
     """Dada la geometría de las zonas con sus datos, devuelve un listado con los hexágonos pertenecientes a cada una.
 
     Args:
-        gdf (GeoDataFrame): Geometría con sus campos de descripcion.
-        resolution (int, optional): Resolución (tamaño) de hexágonos. Default: 9.
+        gdf (GeoDataFrame): geometría con sus campos de descripcion.
+        resolution (int, optional): resolución (tamaño) de hexágonos
 
     Returns:
-        DataFrame: Listado de hexágonos con su asignación de zona.
+        DataFrame: listado de hexágonos con su asignación de zona.
     """ 
-    gdf['hex_border'] = None
-    gdf['hex_filled_voids'] = None
-    
-    for i, row in gdf.iterrows():
-        geometry = row['geometry']
-        
-        if isinstance(geometry, Polygon):
-            polygons = [geometry]
-        elif isinstance(geometry, MultiPolygon):
-            polygons = geometry.geoms
-        else:
-            raise ValueError("Invalid geometry type. Expected Polygon or MultiPolygon.")
-        
-        hexagons_list = []
-        borders_list = []
-        for polygon in polygons:
-            hexagons_list.extend(h3.polyfill(polygon.__geo_interface__, resolution, geo_json_conformant=True))
-            borders_list.extend(get_hexes_traversed_by_borders(polygon, 9))
-
-        gdf.at[i,'hex_border'] = borders_list
-        gdf.at[i, 'hex_filled_voids'] = hexagons_list
-    
+    gdf = fill_hex_res(gdf, res)
     # Genero la asignación de los bordes    
     gdf = include_border_into_polygon(gdf)
     set_hex_border = get_set_border_not_in_polygon(gdf)
     gdf['hex_border'] = order_by_nearest_polygon(set_hex_border, gdf['geometry'])
-    gdf['h3_id'] = gdf.apply(lambda row: row['hex_border'] | row['hex_filled_voids'], axis=1)
+    gdf['h3_id'] = gdf.apply(lambda row: row['hex_border'] | row['hex_filled'], axis=1)
     # Listado de hexágonos
     df = gdf.explode('h3_id').reset_index(drop=True)
-    # Asigno zona a los duplicados a la más cercana
+    # Asigno zona más cercana para eliminar duplicados
     duplicated_rows = df.duplicated(subset=['h3_id'], keep=False)
     selected_rows = df[duplicated_rows].groupby('h3_id').apply(update_zone)
     result = pd.concat([df[~duplicated_rows], selected_rows])
     return result[['h3_id', 'codigo', 'idgla', 'idsucursal', 'zona']].reset_index(drop=True).copy()
 
-
 def generate_branch_limits(df, filename=None):
-    """Genera los bordes de las zonas delimitados por los hexágonos.
+    """Genera los bordes de las zonas delimitados con hexágonos.
 
     Args:
-        df (DataFrame): Listado de hexágonos con su asignación de zona.
-        filename (String, optional): Nombre de archivo de salida en formato GeoJSON
+        df (DataFrame): listado de hexágonos con su asignación.
+        filename (String, optional): nombre de archivo para guardarse como GeoJSON 
     
     Returns:
-        GeoDataFrame: Bordes de las zonas agrupados por código.
+        GeoDataFrame: bordes de zonas agrupados por código.
     """
     def fill_voids(geom):
-        """Rellena los huecos del MultiPolygon y lo convierte en Polygon si es necesario."""
         if not isinstance(geom, MultiPolygon):
             return geom
-        polygons = list(geom)
-        return cascaded_union(polygons)
-    
+        polygons = geom.geoms
+        return unary_union(polygons)
+
     geometry = [Polygon(h3.h3_to_geo_boundary(h, geo_json=True)) for h in df['h3_id']]
     gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
     gdf = gdf.dissolve(by='codigo', aggfunc='first').reset_index()
+    gdf = gdf.to_crs("EPSG:3857") 
+    gdf['geometry'] = gdf['geometry'].buffer(0.1) 
     gdf['geometry'] = gdf['geometry'].apply(fill_voids)
+    gdf = gdf.to_crs("EPSG:4326")
+    result = gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'geometry']].copy()
     
     if filename:
-        gdf.to_file(f'{filename}.geojson', driver='GeoJSON')
+        result.to_file(filename, driver='GeoJSON')
         
-    return gdf
+    return result
