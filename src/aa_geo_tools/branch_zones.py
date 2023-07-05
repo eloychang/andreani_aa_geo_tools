@@ -14,28 +14,31 @@ projection = pyproj.Transformer.from_crs(
     source_crs, target_crs, always_xy=True).transform
 
 def update_zone(row_group):
-    """Actualiza datos de hexágonos duplicados, quedándose con las del borde del polígono más lejano al centroide del hexágono."""
-    proyected_poly1 = transform(projection, row_group.iloc[0]['geometry'])
-    proyected_poly2 = transform(projection, row_group.iloc[1]['geometry'])
-    
-    # Obtengo centroide
-    lat, lon = h3.h3_to_geo(row_group.iloc[0]['h3_id'])
-    # Proyecto para poder obtener distancia en metros
-    projected_point = transform(projection, Point(lon, lat))
-    
-    distances = [
-        proyected_poly1.distance(projected_point),
-        proyected_poly2.distance(projected_point)
-    ]
-    
-    updated_row = row_group.iloc[0].copy()
-    
-    if distances[0] > distances[1]:
-        updated_row[['codigo', 'idgla', 'idsucursal', 'zona']] = row_group.iloc[0][['codigo', 'idgla', 'idsucursal', 'zona']]
+    if len(row_group) == 2:
+        """Actualiza datos de hexágonos duplicados, quedándose con las del borde del polígono más lejano al centroide del hexágono."""
+        proyected_poly1 = transform(projection, row_group.iloc[0]['geometry'])
+        proyected_poly2 = transform(projection, row_group.iloc[1]['geometry'])
+        
+        # Obtengo centroide
+        lat, lon = h3.h3_to_geo(row_group.iloc[0]['h3_id'])
+        # Proyecto para poder obtener distancia en metros
+        projected_point = transform(projection, Point(lon, lat))
+        
+        distances = [
+            proyected_poly1.distance(projected_point),
+            proyected_poly2.distance(projected_point)
+        ]
+        
+        updated_row = row_group.iloc[0].copy()
+        
+        if distances[0] > distances[1]:
+            updated_row[['codigo', 'idgla', 'idsucursal', 'zona']] = row_group.iloc[0][['codigo', 'idgla', 'idsucursal', 'zona']]
+        else:
+            updated_row[['codigo', 'idgla', 'idsucursal', 'zona']] = row_group.iloc[1][['codigo', 'idgla', 'idsucursal', 'zona']]
+        
+        return updated_row
     else:
-        updated_row[['codigo', 'idgla', 'idsucursal', 'zona']] = row_group.iloc[1][['codigo', 'idgla', 'idsucursal', 'zona']]
-    
-    return updated_row
+        return row_group.iloc[0]
 
 
 def order_by_nearest_polygon(set_hex_border, list_polygons):
@@ -73,43 +76,6 @@ def order_by_nearest_polygon(set_hex_border, list_polygons):
     return list_border
 
 
-def get_set_border_not_in_polygon(gdf):
-    """Tomando todos los hexágonos del borde de los polígonos, 
-    obtengo los que no estén incluidos dentro de alguna de las áreas.
-
-    Args:
-        gdf (GeoDataFrame): debe contener la columna 'hex_border' con los bordes de
-        cada área, y la columna 'geometry' con la geometría de los polígonos
-
-    Returns:
-        set(string): conjunto de los hexágonos del borde
-    """
-    # Acumulo todos los hexágonos de los bordes
-    set_hex_border = {h for row in gdf['hex_border'] for h in row}
-
-    set_hex_border_copy = set_hex_border.copy()
-    polygons = gdf['geometry']
-    for h in set_hex_border:
-        lat, lon = h3.h3_to_geo(h)
-        for poly in polygons:
-            # Elimino el hexágono del borde si está dentro de una zona
-            if poly.contains(Point(lon, lat)):
-                set_hex_border_copy.discard(h)
-    return set_hex_border_copy
-
-
-def interpolate_coords_between(start, end, num_points):
-    # Create a LineString object between the start and stop points
-    segment = LineString([start, end])
-    interpolated_coords = [start]
-    for i in range(num_points):
-        fraction = (i + 1) / (num_points + 1)
-        point = segment.interpolate(fraction, normalized=True)
-        interpolated_coords.append((point.x, point.y))
-    interpolated_coords.append(end)
-    return interpolated_coords
-
-
 def get_hexes_traversed_by_borders(polygon, res):
     """Obtiene los hexágonos del borde del polígono, en la resolución dada.
 
@@ -120,8 +86,18 @@ def get_hexes_traversed_by_borders(polygon, res):
     Returns:
         set(string): conjunto de hexágonos obtenidos
     """
+  
+    def interpolate_coords_between(start, end, num_points):
+        segment = LineString([start, end])
+        interpolated_coords = [start]
+        for i in range(num_points):
+            fraction = (i + 1) / (num_points + 1)
+            point = segment.interpolate(fraction, normalized=True)
+            interpolated_coords.append((point.x, point.y))
+        interpolated_coords.append(end)
+        return interpolated_coords
+    
     set_traversed_hexes = set()
-
     # Obtengo coordenadas del borde del polígono
     coords = polygon.boundary.coords
     for j in range(len(coords)-1):
@@ -158,7 +134,7 @@ def include_border_into_polygon(gdf):
     # Acumulo todos los hexágonos de los bordes
     set_hex_border = {h for row in gdf['hex_border'] for h in row}
 
-    list_add_hex = []
+    list_hex = []
     for _, row in gdf.iterrows():
         set_hex = set()
         for h in set_hex_border:
@@ -166,11 +142,13 @@ def include_border_into_polygon(gdf):
             # Agrego el hexágono del borde si está dentro de una zona
             if row['geometry'].contains(Point(lon, lat)):
                 set_hex.add(h)
-        list_add_hex.append(set_hex)
+        list_hex.append(set_hex)
 
-    gdf['add_in_zone'] = list_add_hex
+    gdf['add_in_zone'] = list_hex
     gdf['hex_filled'] = gdf.apply(
         lambda row: set(row['hex_filled']) | row['add_in_zone'], axis=1)
+    gdf['hex_border'] = gdf.apply(
+        lambda row: set(row['hex_border']) - row['add_in_zone'], axis=1)
     return gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'geometry', 'hex_filled', 'hex_border']].copy()
 
 
@@ -206,16 +184,17 @@ def generate_hexagons_list(gdf, res):
     gdf = fill_hex_res(gdf, res)
     # Genero la asignación de los bordes    
     gdf = include_border_into_polygon(gdf)
-    set_hex_border = get_set_border_not_in_polygon(gdf)
+    set_hex_border = {h for row in gdf['hex_border'] for h in row}
     gdf['hex_border'] = order_by_nearest_polygon(set_hex_border, gdf['geometry'])
     gdf['h3_id'] = gdf.apply(lambda row: row['hex_border'] | row['hex_filled'], axis=1)
     # Listado de hexágonos
     df = gdf.explode('h3_id').reset_index(drop=True)
     # Asigno zona más cercana para eliminar duplicados
     duplicated_rows = df.duplicated(subset=['h3_id'], keep=False)
-    selected_rows = df[duplicated_rows].groupby('h3_id').apply(update_zone)
-    result = pd.concat([df[~duplicated_rows], selected_rows])
-    return result[['h3_id', 'codigo', 'idgla', 'idsucursal', 'zona']].reset_index(drop=True).copy()
+    if any(duplicated_rows):
+        selected_rows = df[duplicated_rows].groupby('h3_id').apply(update_zone)
+        df = pd.concat([df[~duplicated_rows], selected_rows])
+    return df[['h3_id', 'codigo', 'idgla', 'idsucursal', 'zona']].reset_index(drop=True).copy()
 
 def generate_branch_limits(df, filename=None):
     """Genera los bordes de las zonas delimitados con hexágonos.
