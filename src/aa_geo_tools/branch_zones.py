@@ -99,7 +99,8 @@ def get_hexes_traversed_by_borders(polygon, res):
     
     set_traversed_hexes = set()
     # Obtengo coordenadas del borde del polígono
-    coords = polygon.boundary.coords
+    #coords = polygon.boundary.coords
+    coords = polygon.exterior.coords
     for j in range(len(coords)-1):
         # Para cada segmento del linestring, obtengo el punto inicial y final
         start_leg = coords[j]
