@@ -161,14 +161,15 @@ def fill_hex_res(gdf, res):
         res (int): resolución (tamaño) de los hexágonos
 
     Returns:
-        GeoDataFrame: mismo que el input, con los hexágonos resultado de rellenar las zonas y sus bordes.
+        GeoDataFrame: copia de gdf con hexágonos resultado de rellenar las zonas y sus bordes.
     """
-    gdf["geom_geojson"] = gdf["geometry"].apply(
+    gdf_copy = gpd.GeoDataFrame.copy(gdf)
+    gdf_copy["geom_geojson"] = gdf_copy["geometry"].apply(
         lambda x: mapping(x))
-    gdf["hex_filled"] = gdf["geom_geojson"].apply(
+    gdf_copy["hex_filled"] = gdf_copy["geom_geojson"].apply(
         lambda x: list(h3.polyfill(geojson=x, res=res, geo_json_conformant=True)))
-    gdf['hex_border'] = gdf.apply(lambda row : get_hexes_traversed_by_borders(row['geometry'], res), axis = 1)
-    return gdf[['codigo', 'idgla', 'idsucursal', 'zona', 'hex_filled', 'hex_border', 'geometry']].copy()
+    gdf_copy['hex_border'] = gdf_copy.apply(lambda row : get_hexes_traversed_by_borders(row['geometry'], res), axis = 1)
+    return gdf_copy[['codigo', 'idgla', 'idsucursal', 'zona', 'hex_filled', 'hex_border', 'geometry']]
 
 
 def generate_hexagons_list(gdf, res):
